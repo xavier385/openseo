@@ -1,0 +1,69 @@
+name: Deploy self-host (Cloudflare)
+
+# Installa o aggiorna OpenSEO sull'account Cloudflare del proprietario.
+# Si avvia solo a mano (Actions -> Deploy self-host -> Run workflow).
+# Secret richiesti: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, DATAFORSEO_API_KEY.
+# Variabile richiesta: ACCESS_ALLOWED_EMAILS (indirizzi che possono entrare, separati da virgola).
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-selfhost
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository != 'every-app/open-seo'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Controlla secret e variabili
+        env:
+          DATAFORSEO_API_KEY: ${{ secrets.DATAFORSEO_API_KEY }}
+          ACCESS_ALLOWED_EMAILS: ${{ vars.ACCESS_ALLOWED_EMAILS }}
+        run: |
+          missing=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "$DATAFORSEO_API_KEY" ] || missing="$missing DATAFORSEO_API_KEY"
+          [ -n "$ACCESS_ALLOWED_EMAILS" ] || missing="$missing ACCESS_ALLOWED_EMAILS(variabile)"
+          if [ -n "$missing" ]; then echo "Mancano:$missing"; exit 1; fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Crea .env.selfhost
+        env:
+          DATAFORSEO_API_KEY: ${{ secrets.DATAFORSEO_API_KEY }}
+          ACCESS_ALLOWED_EMAILS: ${{ vars.ACCESS_ALLOWED_EMAILS }}
+        run: |
+          umask 077
+          {
+            echo "DATAFORSEO_API_KEY=$DATAFORSEO_API_KEY"
+            echo "ACCESS_ALLOWED_EMAILS=$ACCESS_ALLOWED_EMAILS"
+            echo "OPENSEO_TELEMETRY_DISABLED=1"
+          } > .env.selfhost
+
+      # Crea lo state store di alchemy alla prima esecuzione; dopo riusa quello esistente.
+      - name: Bootstrap state store
+        run: pnpm alchemy cloudflare bootstrap --env-file .env.selfhost
+
+      - name: Deploy
+        run: pnpm deploy:selfhost --yes
+
+      - name: Rimuovi .env.selfhost
+        if: always()
+        run: rm -f .env.selfhost
